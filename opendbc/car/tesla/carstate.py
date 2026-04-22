@@ -10,6 +10,8 @@ from opendbc.sunnypilot.car.tesla.carstate_ext import CarStateExt
 
 ButtonType = structs.CarState.ButtonEvent.Type
 STEERING_KNUCKLE_ARM_LENGTH_M = 0.11
+FSD14_MISMATCH_DETECT_FRAMES = 15
+FSD14_MISMATCH_HOLD_FRAMES = 100
 
 
 class CarState(CarStateBase, CarStateExt):
@@ -24,6 +26,8 @@ class CarState(CarStateBase, CarStateExt):
     self.cruise_override = False
     self.cruise_enabled_prev = False
     self.suspected_fsd14 = False
+    self.fsd14_mismatch_frames = 0
+    self.fsd14_mismatch_hold_frames = 0
 
     self.hands_on_level = 0
     self.prev_acc_state = 0
@@ -148,13 +152,29 @@ class CarState(CarStateBase, CarStateExt):
     # Stock Autosteer should be disengaged (includes FSD)
     # TODO: find for TESLA_MODEL_X and HW2.5 vehicles
     if not (self.CP.flags & TeslaFlags.MISSING_DAS_SETTINGS):
-      if not (self.CP.flags & TeslaFlags.FSD_14):
-        # Temporary personal-test bypass: suppress invalidLkasSetting on non-FSD14 vehicles.
-        ret.invalidLkasSetting = False
-        self.suspected_fsd14 = False
+      base_invalid_lkas = cp_ap_party.vl["DAS_status"]["DAS_autopilotState"] not in (0, 1, 2) # DISABLED, UNAVAILABLE, AVAILABLE
+      angle_control = cp_ap_party.vl["DAS_steeringControl"]["DAS_steeringControlType"] == 1
+      fsd14_mismatch_now = cruise_enabled and angle_control and not base_invalid_lkas and not (self.CP.flags & TeslaFlags.FSD_14)
+
+      if fsd14_mismatch_now:
+        self.fsd14_mismatch_frames = min(self.fsd14_mismatch_frames + 1, FSD14_MISMATCH_DETECT_FRAMES)
+      elif cruise_enabled:
+        self.fsd14_mismatch_frames = max(self.fsd14_mismatch_frames - 1, 0)
       else:
-        ret.invalidLkasSetting = cp_ap_party.vl["DAS_status"]["DAS_autopilotState"] not in (0, 1, 2) # DISABLED, UNAVAILABLE, AVAILABLE
-        self.suspected_fsd14 = False
+        self.fsd14_mismatch_frames = 0
+        self.fsd14_mismatch_hold_frames = 0
+
+      if self.fsd14_mismatch_frames >= FSD14_MISMATCH_DETECT_FRAMES:
+        self.fsd14_mismatch_hold_frames = FSD14_MISMATCH_HOLD_FRAMES
+      elif self.fsd14_mismatch_hold_frames > 0 and not fsd14_mismatch_now:
+        self.fsd14_mismatch_hold_frames -= 1
+
+      self.suspected_fsd14 = self.fsd14_mismatch_hold_frames > 0
+      ret.invalidLkasSetting = base_invalid_lkas or self.suspected_fsd14
+    else:
+      self.suspected_fsd14 = False
+      self.fsd14_mismatch_frames = 0
+      self.fsd14_mismatch_hold_frames = 0
 
     # Buttons # ToDo: add Gap adjust button
 
