@@ -1,6 +1,7 @@
 import copy
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
+from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.tesla.teslacan import get_steer_ctrl_type
@@ -151,8 +152,12 @@ class CarState(CarStateBase, CarStateExt):
 
     # Stock Autosteer should be disengaged (includes FSD)
     # TODO: find for TESLA_MODEL_X and HW2.5 vehicles
+    suspected_fsd14_prev = self.suspected_fsd14
+    autopilot_state = int(cp_ap_party.vl["DAS_status"]["DAS_autopilotState"])
+    base_invalid_lkas = False
+    angle_control = False
     if not (self.CP.flags & TeslaFlags.MISSING_DAS_SETTINGS):
-      base_invalid_lkas = cp_ap_party.vl["DAS_status"]["DAS_autopilotState"] not in (0, 1, 2) # DISABLED, UNAVAILABLE, AVAILABLE
+      base_invalid_lkas = autopilot_state not in (0, 1, 2) # DISABLED, UNAVAILABLE, AVAILABLE
       angle_control = cp_ap_party.vl["DAS_steeringControl"]["DAS_steeringControlType"] == 1
       fsd14_mismatch_now = cruise_enabled and angle_control and not base_invalid_lkas and not (self.CP.flags & TeslaFlags.FSD_14)
 
@@ -175,6 +180,9 @@ class CarState(CarStateBase, CarStateExt):
       self.suspected_fsd14 = False
       self.fsd14_mismatch_frames = 0
       self.fsd14_mismatch_hold_frames = 0
+
+    if self.suspected_fsd14 != suspected_fsd14_prev:
+      carlog.error(f"tesla fsd14 failsafe {'on' if self.suspected_fsd14 else 'off'}: autopilotState={autopilot_state}, angleControl={int(angle_control)}, cruiseEnabled={int(cruise_enabled)}, baseInvalidLkas={int(base_invalid_lkas)}, fsd14Flag={int(bool(self.CP.flags & TeslaFlags.FSD_14))}")
 
     # Buttons # ToDo: add Gap adjust button
 
